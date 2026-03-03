@@ -1,56 +1,64 @@
--- Crea la base de datos si no existe.
-CREATE DATABASE SaludPlus;
+CREATE DATABASE IF NOT EXISTS LogiTech;
+USE LogiTech;
 
--- Selecciona la base de datos SaludPlus para trabajar sobre ella.
-USE SaludPlus;
-
--- Crea la tabla de pacientes con campos básicos e ID autoincremental.
-CREATE TABLE patients (
+-- 1. Categorías 
+CREATE TABLE Categories (
     id INT AUTO_INCREMENT PRIMARY KEY,
-    name VARCHAR(100) NOT NULL,
-    email VARCHAR(100) UNIQUE NOT NULL, -- UNIQUE asegura que no haya correos repetidos
+    name VARCHAR(100) NOT NULL UNIQUE
+    ON DELETE CASCADE
+);
+
+-- 2. Proveedores 
+CREATE TABLE Suppliers (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(150) NOT NULL UNIQUE,
+    contact_email VARCHAR(150),
+    ON DELETE CASCADE
+);
+
+-- 3. Clientes 
+CREATE TABLE Customers (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    full_name VARCHAR(150) NOT NULL,
+    email VARCHAR(150) NOT NULL UNIQUE,
+    address TEXT,
     phone VARCHAR(20),
-    address VARCHAR(150) NOT NULL
+    ON DELETE CASCADE
 );
 
--- Crea la tabla de doctores.
-CREATE TABLE doctors (
+
+CREATE TABLE Products (
     id INT AUTO_INCREMENT PRIMARY KEY,
-    name VARCHAR(100) NOT NULL,
-    email VARCHAR(100) UNIQUE NOT NULL,
-    specialty VARCHAR(100) NOT NULL
+    sku VARCHAR(50) NOT NULL UNIQUE,
+    name VARCHAR(150) NOT NULL,
+    price DECIMAL(10,2) NOT NULL,
+    stock INT DEFAULT 0, 
+    supplier_id INT,
+    FOREIGN KEY (category_id) REFERENCES Categories(id),
+    FOREIGN KEY (supplier_id) REFERENCES Suppliers(id),
+    ON DELETE CASCADE
 );
 
--- Crea la tabla de aseguradoras.
-CREATE TABLE insurances (
+
+CREATE TABLE Orders (
     id INT AUTO_INCREMENT PRIMARY KEY,
-    name VARCHAR(100) UNIQUE NOT NULL,
-    coverage_percentage DECIMAL(5,2) NOT NULL -- DECIMAL para precisión monetaria
+    transaction_id VARCHAR(50) NOT NULL UNIQUE,
+    customer_id INT,
+    order_date DATETIME NOT NULL, 
+    FOREIGN KEY (customer_id) REFERENCES Customers(id),
+    ON DELETE CASCADE
 );
 
--- Crea la tabla de citas, que une a pacientes, doctores y aseguradoras.
-CREATE TABLE appointments (
+
+CREATE TABLE Order_Items (
     id INT AUTO_INCREMENT PRIMARY KEY,
-    appointment_id VARCHAR(50) UNIQUE NOT NULL, -- ID único externo
-    appointment_date DATETIME NOT NULL,
-    patient_id INT NOT NULL,
-    doctor_id INT NOT NULL,
-    insurance_id INT NULL, -- NULL por si la cita no está asegurada
-    treatment_code VARCHAR(50) NOT NULL,
-    treatment_description VARCHAR(255),
-    treatment_cost DECIMAL(10,2) NOT NULL,
-    amount_paid DECIMAL(10,2) NOT NULL,
-
-    -- Define restricciones de llave foránea (Foreign Keys) para asegurar integridad referencial.
-    CONSTRAINT fk_patient
-        FOREIGN KEY (patient_id) REFERENCES patients(id)
-        ON DELETE CASCADE, -- Si se borra un paciente, se borran sus citas
-    
-    CONSTRAINT fk_doctor
-        FOREIGN KEY (doctor_id) REFERENCES doctors(id)
-        ON DELETE CASCADE, -- Si se borra un doctor, se borran sus citas
-    
-    CONSTRAINT fk_insurance
-        FOREIGN KEY (insurance_id) REFERENCES insurances(id)
-        ON DELETE SET NULL -- Si se borra una aseguradora, el campo se pone en NULL
+    order_id INT,
+    product_id INT,
+    quantity INT NOT NULL,
+    unit_price DECIMAL(10,2) NOT NULL,
+    line_total DECIMAL(10,2) NOT NULL, 
+    FOREIGN KEY (order_id) REFERENCES Orders(id),
+    FOREIGN KEY (product_id) REFERENCES Products(id),
+    ON DELETE CASCADE
 );
+

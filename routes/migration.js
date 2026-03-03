@@ -5,101 +5,122 @@ const multer = require('multer');
 const fs = require('fs');
 const csv = require('csv-parser');
 
-// Importa conexiones a MySQL y modelo de MongoDB.
 const connection = require('../config/mysql.js');
-const PatientHistory = require('../models/patientHistory.js');
+const AuditLog = require('../models/auditLog.js');
 const { error } = require('console');
 
-// Configura dónde y cómo se guardan los archivos subidos.
 const storage = multer.diskStorage({
     destination: (req, file, cb) => cb(null, 'uploads/'),
     filename: (req, file, cb) => cb(null, Date.now() + '_' + file.originalname)
 });
 const upload = multer({ storage });
-
-// --- POST /api/upload (Subir archivo CSV) ---
 router.post('/upload', upload.single('file'), async (req, res) => {
-    try{
-    const resultados = [];
+    console.log('Archivo recibido:', req.file);
+    try {
+                const resultados = [];
+                fs.createReadStream(req.file.path)
+                    .pipe(csv())
+                    .on('data', data => resultados.push(data))
+                    .on('end', async () => {
+                        for (const row of resultados) {
+                            // 1. Category
+                            await connection.query(
+                                `INSERT IGNORE INTO Categories (name) VALUES (?)`,
+                                [row.product_category]
+                            );
+                            const [catRows] = await connection.query(
+                                `SELECT id FROM Categories WHERE name = ?`,
+                                [row.product_category]
+                            );
+                            const categoryId = catRows[0].id;
 
-    // Lee el archivo CSV subido línea por línea.
-    fs.createReadStream(req.file.path)
-    .pipe(csv())
-    // Por cada línea ('data'), la agrega al array resultados.
-    .on('data', data => resultados.push(data))
-    // Cuando termina de leer ('end'), procesa los datos.
-    .on('end', async () => {
-        // Itera sobre cada fila del CSV.
-        for (const row of resultados) {
+                            // 2. Supplier
+                            await connection.query(
+                                `INSERT IGNORE INTO Suppliers (name, contact_email) VALUES (?,?)`,
+                                [row.supplier_name, row.supplier_email]
+                            );
+                            const [supRows] = await connection.query(
+                                `SELECT id FROM Suppliers WHERE name = ?`,
+                                [row.supplier_name]
+                            );
+                            const supplierId = supRows[0].id;
 
-            // 1. MySQL: Inserta paciente si no existe (INSERT IGNORE).
-            await connection.query(
-                `INSERT IGNORE INTO patients (name,email,phone,address) VALUES (?,?,?,?)`,
-                [row.patient_name,row.patient_email,row.patient_phone,row.patient_address]
-            );
+                            // 3. Customer
+                            await connection.query(
+                                `INSERT IGNORE INTO Customers (full_name,email,address,phone) VALUES (?,?,?,?)`,
+                                [row.customer_name, row.customer_email, row.customer_address, row.customer_phone]
+                            );
+                            const [custRows] = await connection.query(
+                                `SELECT id FROM Customers WHERE email = ?`,
+                                [row.customer_email]
+                            );
+                            const customerId = custRows[0].id;
 
-            // 2. MySQL: Inserta doctor si no existe.
-            await connection.query(
-                `INSERT IGNORE INTO doctors (name,email,specialty) VALUES (?,?,?)`,
-                [row.doctor_name,row.doctor_email,row.specialty]
-            );
+                            // 4. Product
+                            await connection.query(
+                                `INSERT IGNORE INTO Products (sku,name,price,stock,category_id,supplier_id)
+                                VALUES (?,?,?,?,?,?)`,
+                                [
+                                    row.product_sku,
+                                    row.product_name,
+                                    parseFloat(row.unit_price) || 0,
+                                    0,
+                                    categoryId,
+                                    supplierId
+                                ]
+                            );
+                            const [prodRows] = await connection.query(
+                                `SELECT id FROM Products WHERE sku = ?`,
+                                [row.product_sku]
+                            );
+                            const productId = prodRows[0].id;
 
-            // 3. MySQL: Inserta aseguradora si no existe.
-            await connection.query(
-                `INSERT IGNORE INTO insurances (name,coverage_percentage) VALUES (?,?)`,
-                [row.insurance_provider,row.coverage_percentage]
-            );
+                            // 5. Order
+                            await connection.query(
+                                `INSERT IGNORE INTO Orders (transaction_id,customer_id,order_date)
+                                VALUES (?,?,?)`,
+                                [row.transaction_id, customerId, row.date]
+                            );
+                            const [orderRows] = await connection.query(
+                                `SELECT id FROM Orders WHERE transaction_id = ?`,
+                                [row.transaction_id]
+                            );
+                            const orderId = orderRows[0].id;
 
-            // 4. MySQL: Inserta cita usando IDs de las tablas anteriores (INSERT IGNORE para idempotencia).
-            await connection.query(
-                `INSERT IGNORE INTO appointments (appointment_id,appointment_date,patient_id,doctor_id,insurance_id,treatment_code,treatment_description,treatment_cost,amount_paid)
-                SELECT ?, ?, p.id, d.id, i.id, ?, ?, ?, ?
-                FROM patients p
-                JOIN doctors d ON d.email = ?
-                LEFT JOIN insurances i ON i.name = ?
-                WHERE p.email = ?`,
-                [
-                row.appointment_id,
-                row.appointment_date,
-                row.treatment_code,
-                row.treatment_description,
-                row.treatment_cost,
-                row.amount_paid,
-                row.doctor_email,
-                row.insurance_provider,
-                row.patient_email
-                ]
-            );
-
-            // 5. MongoDB: Actualiza o inserta el historial del paciente.
-            await PatientHistory.findOneAndUpdate(
-                { patientEmail: row.patient_email }, // Filtro por correo.
-                {
-                    patientName: row.patient_name,
-                    // Agrega la cita al array si no existe ya ($addToSet).
-                    $addToSet: {
-                        appointments: {
-                            appointmentId: row.appointment_id,
-                            date: row.appointment_date,
-                            doctorName: row.doctor_name,
-                            specialty: row.specialty,
-                            treatmentDescription: row.treatment_description,
-                            amountPaid: row.amount_paid
+                            // 6. Order_Items
+                            await connection.query(
+                                `INSERT IGNORE INTO Order_Items (order_id,product_id,quantity,unit_price,line_total)
+                                VALUES (?,?,?,?,?)`,
+                                [
+                                    orderId,
+                                    productId,
+                                    parseInt(row.quantity, 10) || 0,
+                                    parseFloat(row.unit_price) || 0,
+                                    parseFloat(row.total_line_value) || 0
+                                ]
+                            );
+                    await connection.query(
+                            `UPDATE Products SET stock = stock + ? WHERE id = ?`,
+                            [parseInt(row.quantity, 10) || 0, productId]
+                            );
                         }
-                    }
-                },
-                { upsert: true } // Crea el documento si no existe.
-            );
-        }
-        // Responde que la migración terminó.
-        res.json({ 
-            mensaje: 'Migración completada',
-        });
-    });
-} catch (error) {
-    console.error(error);
-    res.status(500).json({error: 'error en migracion'});
-}
+                        // Guardar auditoría
+                        try {
+                            await AuditLog.create({
+                                fileName: req.file.filename,
+                                processedRows: resultados.length,
+                                success: true
+                            });
+                        } catch (auditErr) {
+                            console.error('Error guardando auditoría:', auditErr);
+                        }
+
+                        res.json({ mensaje: 'Migración completada' });
+                    });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: 'error en migracion' });
+    }
 });
 
 module.exports = router;
